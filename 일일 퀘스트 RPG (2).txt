@@ -1,0 +1,309 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection } from 'firebase/firestore';
+import { Sword, Shield, Plus, Trash2, Moon, Trophy, Sparkles } from 'lucide-react';
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  // Fallback config for local testing if needed, though production environment will inject this.
+  apiKey: "mock-key", projectId: "mock-project" 
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'rpg-todo-app';
+
+export default function RPGQuestApp() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [level, setLevel] = useState(1);
+  const [exp, setExp] = useState(0);
+  const [quests, setQuests] = useState([]);
+  const [newQuestText, setNewQuestText] = useState('');
+  const [showLevelUp, setShowLevelUp] = useState(false);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth Error:", err);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Strict path rule applied
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'playerData', 'main');
+
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setLevel(data.level || 1);
+        setExp(data.exp || 0);
+        setQuests(data.quests || []);
+        setLoading(false);
+      } else {
+        // Initialize Default Quests for New User
+        const initialData = {
+          level: 1,
+          exp: 0,
+          quests: [
+            { id: '1', text: '물 2L 마시기', completed: false, expReward: 15 },
+            { id: '2', text: '30분 운동하기', completed: false, expReward: 30 },
+            { id: '3', text: '책 10페이지 읽기', completed: false, expReward: 20 },
+          ]
+        };
+        setDoc(docRef, initialData).then(() => setLoading(false));
+      }
+    }, (error) => {
+      console.error("Firestore snapshot error:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const toggleQuest = async (questId) => {
+    if (!user) return;
+    const quest = quests.find(q => q.id === questId);
+    if (!quest) return;
+
+    let newLevel = level;
+    let newExp = exp;
+    const isCompleting = !quest.completed;
+
+    if (isCompleting) {
+      newExp += quest.expReward;
+      if (newExp >= 100) {
+        newLevel += Math.floor(newExp / 100);
+        newExp = newExp % 100;
+        
+        // Trigger Level Up Animation
+        setShowLevelUp(true);
+        setTimeout(() => setShowLevelUp(false), 3000);
+      }
+    } else {
+      // Prevent negative level/exp mapping if unchecked
+      newExp -= quest.expReward;
+      if (newExp < 0) {
+        if (newLevel > 1) {
+          newLevel--;
+          newExp = 100 + newExp;
+        } else {
+          newExp = 0;
+        }
+      }
+    }
+
+    const updatedQuests = quests.map(q => 
+      q.id === questId ? { ...q, completed: isCompleting } : q
+    );
+
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'playerData', 'main');
+    await updateDoc(docRef, {
+      level: newLevel,
+      exp: newExp,
+      quests: updatedQuests
+    });
+  };
+
+  const addQuest = async (e) => {
+    e.preventDefault();
+    if (!newQuestText.trim() || !user) return;
+    
+    // Assign random EXP reward between 10 and 25 for custom quests
+    const randomExp = Math.floor(Math.random() * 16) + 10;
+    const newQuest = {
+      id: Date.now().toString(),
+      text: newQuestText,
+      completed: false,
+      expReward: randomExp
+    };
+
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'playerData', 'main');
+    await updateDoc(docRef, { quests: [...quests, newQuest] });
+    setNewQuestText('');
+  };
+
+  const deleteQuest = async (questId) => {
+    if (!user) return;
+    const updatedQuests = quests.filter(q => q.id !== questId);
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'playerData', 'main');
+    await updateDoc(docRef, { quests: updatedQuests });
+  };
+
+  const restAtInn = async () => {
+    if (!user) return;
+    const updatedQuests = quests.map(q => ({ ...q, completed: false }));
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'playerData', 'main');
+    await updateDoc(docRef, { quests: updatedQuests });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center font-retro text-white">
+        <style>{`@import url('https://cdn.jsdelivr.net/npm/galmuri@latest/dist/galmuri.css'); .font-retro { font-family: 'Galmuri11', sans-serif; }`}</style>
+        <p className="animate-pulse flex items-center gap-2">
+          <Sword className="animate-bounce" /> 데이터를 불러오는 중...
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-retro selection:bg-yellow-500 selection:text-black">
+      <style>
+        {`
+          @import url('https://cdn.jsdelivr.net/npm/galmuri@latest/dist/galmuri.css');
+          .font-retro { font-family: 'Galmuri11', sans-serif; }
+          .pixel-border { box-shadow: inset 0 0 0 4px #334155, 0 4px 0 0 #000; }
+          .pixel-border-gold { box-shadow: inset 0 0 0 4px #ca8a04, 0 4px 0 0 #000; }
+        `}
+      </style>
+
+      {/* Level Up Overlay */}
+      {showLevelUp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity duration-300">
+          <div className="text-center animate-bounce">
+            <h2 className="text-5xl text-yellow-400 drop-shadow-[0_0_15px_rgba(250,204,21,0.8)] mb-4 flex items-center justify-center gap-4">
+              <Sparkles size={48} />
+              LEVEL UP!
+              <Sparkles size={48} />
+            </h2>
+            <p className="text-xl text-white">레벨 {level} 달성!</p>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-md w-full mx-auto bg-slate-900 min-h-screen border-x-4 border-slate-800 shadow-2xl pb-10">
+        
+        {/* Header / Stats Panel */}
+        <div className="bg-slate-800 p-6 border-b-4 border-slate-700 relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-2 text-slate-700 opacity-20 transform rotate-12">
+            <Shield size={120} />
+          </div>
+          
+          <div className="relative z-10 flex items-end justify-between mb-4">
+            <div>
+              <p className="text-slate-400 text-sm mb-1">용사 프로필</p>
+              <div className="flex items-center gap-2">
+                <div className="bg-slate-700 p-2 rounded pixel-border">
+                  <Sword size={24} className="text-yellow-400" />
+                </div>
+                <h1 className="text-3xl text-white drop-shadow-md">Lv. {level}</h1>
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="text-yellow-400 text-sm flex items-center gap-1 justify-end">
+                <Trophy size={14} /> EXP
+              </span>
+              <p className="text-xl">{exp} / 100</p>
+            </div>
+          </div>
+
+          {/* EXP Bar */}
+          <div className="w-full bg-slate-950 h-6 border-2 border-slate-600 rounded-sm overflow-hidden relative">
+            <div 
+              className="h-full bg-gradient-to-r from-green-500 to-green-400 transition-all duration-700 ease-out"
+              style={{ width: `${exp}%` }}
+            ></div>
+            <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPgo8cmVjdCB3aWR0aD0iNCIgaGVpZ2h0PSI0IiBmaWxsPSJub25lIi8+CjxwYXRoIGQ9Ik0wIDRMNCwwIiBzdHJva2U9InJnYmEoMjU1LDI1NSwyNTUsMC4yKSIgc3Ryb2tlLXdpZHRoPSIxIi8+Cjwvc3ZnPg==')] opacity-50"></div>
+          </div>
+        </div>
+
+        {/* Quest List Section */}
+        <div className="p-4">
+          <div className="flex items-center justify-between mb-6 mt-2">
+            <h2 className="text-xl text-yellow-400 drop-shadow-sm flex items-center gap-2">
+              <Sparkles size={20} /> 현재 퀘스트
+            </h2>
+            <button 
+              onClick={restAtInn}
+              className="flex items-center gap-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 py-1.5 px-3 rounded pixel-border transition-colors active:translate-y-1"
+            >
+              <Moon size={14} /> 여관 휴식(초기화)
+            </button>
+          </div>
+
+          <div className="space-y-3 mb-8">
+            {quests.length === 0 ? (
+              <div className="text-center p-8 bg-slate-800/50 rounded border-2 border-dashed border-slate-700 text-slate-500">
+                현재 수락한 퀘스트가 없습니다.
+              </div>
+            ) : (
+              quests.map((quest) => (
+                <div 
+                  key={quest.id} 
+                  className={`relative flex items-center gap-3 p-4 bg-slate-800 border-2 transition-all duration-200 group
+                    ${quest.completed 
+                      ? 'border-green-800/50 opacity-60 bg-slate-800/50' 
+                      : 'border-slate-600 hover:border-slate-500 hover:-translate-y-1'
+                    }`}
+                >
+                  <button 
+                    onClick={() => toggleQuest(quest.id)}
+                    className={`w-8 h-8 flex-shrink-0 flex items-center justify-center border-2 
+                      ${quest.completed ? 'bg-green-600 border-green-400' : 'bg-slate-900 border-slate-500'} 
+                      active:scale-90 transition-transform`}
+                  >
+                    {quest.completed && <Sword size={16} className="text-white transform -rotate-45" />}
+                  </button>
+                  
+                  <div className="flex-1 min-w-0">
+                    <p className={`truncate ${quest.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+                      {quest.text}
+                    </p>
+                    <p className="text-xs text-yellow-500 mt-1">+{quest.expReward} EXP</p>
+                  </div>
+
+                  <button 
+                    onClick={() => deleteQuest(quest.id)}
+                    className="p-2 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="퀘스트 포기"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Add New Quest Form */}
+          <form onSubmit={addQuest} className="mt-4 relative">
+            <h3 className="text-sm text-slate-400 mb-2">새로운 퀘스트 수락</h3>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newQuestText}
+                onChange={(e) => setNewQuestText(e.target.value)}
+                placeholder="어떤 임무를 수행할까요?"
+                className="flex-1 bg-slate-950 border-2 border-slate-700 p-3 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-yellow-600 transition-colors"
+                maxLength={40}
+              />
+              <button 
+                type="submit"
+                disabled={!newQuestText.trim()}
+                className="bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 disabled:hover:bg-yellow-700 text-white px-4 border-2 border-yellow-900 flex items-center justify-center active:bg-yellow-800 transition-colors"
+              >
+                <Plus size={24} />
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
